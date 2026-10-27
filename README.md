@@ -33,12 +33,11 @@ passed. They either build a draft or return a preview:
   In-Reply-To/References, keeps Gmail's thread view), optionally reply-all.
   There is deliberately no "send a reply" tool in this server - replying
   always lands as a draft you send yourself from Gmail.
-- `modify_draft` - replace a draft's recipient, subject, body and/or From address in one call
-- `modify_draft_recipient` - change just the To, keep the rest
-- `modify_draft_subject_line` - change just the subject, keep the rest
-- `modify_draft_message` - change just the body, keep the rest
-- `attach_document` - attach a local file (≤25MB) to an existing draft
-- `download_attachment` - save an incoming attachment to a local file path
+- `modify_draft` - replace a draft's recipient, subject, body and/or From
+  address in one call (attachments are kept)
+- `attach_document` - add a file from the files folder to an existing draft,
+  keeping its text, formatting and earlier attachments (≤25MB in total)
+- `download_attachment` - save an incoming attachment into the files folder
 - `delete_draft` - permanently delete a draft (not a sent message)
 
 Organize:
@@ -85,9 +84,12 @@ that account all use it automatically. `list_accounts` (and
 - **One-off override.** Pass `from` on a single `send_email`,
   `create_draft` or `draft_reply_to_message` call to use a different
   verified address for just that message, without changing the default.
-- **Draft edits keep the From and the thread.** Editing a draft (its
-  recipient, subject, body, or adding an attachment) keeps the From it
-  already has, and a reply draft stays in its email thread.
+- **Draft edits keep everything you didn't change.** Editing a draft (its
+  recipient, subject, body, or adding an attachment) keeps its From, its
+  email thread, its existing attachments and inline images, and its HTML
+  formatting. The one exception: replacing the body with `modify_draft`
+  drops the old HTML, since the new text is plain and recipients would
+  otherwise still see the old formatted version.
   `modify_draft` changes it only if you pass `from`.
 - **Reply-all leaves you out.** Reply-all drops both your primary address and
   your send-as address from the Cc list.
@@ -274,6 +276,23 @@ Use the **absolute path** to wherever you put this folder. Then fully quit
 and reopen Claude Desktop. You should see "multi-gmail" show up as a
 connected MCP server (look under the hammer/tools icon in a chat).
 
+### The files folder
+
+`attach_document` and `download_attachment` only work inside one folder,
+`~/Downloads/gmail-mcp` (created the first time it's needed). To attach a
+file, put it there first; downloaded attachments land there too. macOS may
+ask once whether Claude can access your Downloads folder - allow it.
+
+To use a different folder, add an `env` entry to the same config:
+
+```json
+"multi-gmail": {
+  "command": "node",
+  "args": ["/absolute/path/to/multi-gmail-mcp/src/server.js"],
+  "env": { "MULTI_GMAIL_MCP_FILES_DIR": "/Users/you/gmail-files" }
+}
+```
+
 ## 5. Use it
 
 Just talk to Claude naturally:
@@ -295,7 +314,7 @@ parsing, MIME/body parsing, status derivation, the account store, and the
 audit log:
 
 ```bash
-npm test     # 40 tests
+npm test     # 50 tests
 npm run lint    # eslint
 npm run format  # prettier --write
 ```
@@ -336,11 +355,13 @@ wrong thing with your email." What's defended against:
   outcome, and a few identifying fields (recipient, subject, message/draft
   id). It deliberately never logs the email body. Tail it with
   `tail -f ~/.multi-gmail-mcp/audit.log` if something looks off later.
-- **Destination checks on downloads/attachments.** `attach_document` and
-  `download_attachment` resolve the given path, confirm the target
-  folder/file actually exists (or doesn't, for overwrite protection), and
-  cap size at Gmail's own 25MB ceiling - all before touching the filesystem
-  for real.
+- **File access limited to one folder.** `attach_document` can only read
+  from, and `download_attachment` can only write to, the files folder
+  (`~/Downloads/gmail-mcp` by default). Paths are checked after resolving
+  `../` and symlinks, so an injected tool call can't attach `~/.ssh/id_rsa`
+  to a draft or overwrite a file elsewhere. Downloads never overwrite an
+  existing file without `overwrite: true` and never write through a
+  symlink, and both tools cap size at Gmail's own 25MB.
 - **Crash-safe token storage.** `accounts.json` is written atomically
   (write to a temp file, then rename) and in-process writes are serialized,
   so a crash mid-write, or two tool calls racing, can't corrupt the file
@@ -353,8 +374,12 @@ wrong thing with your email." What's defended against:
   passwords) for every connected account, saved with permissions restricted
   to your user (`0600`). Treat that file like a password vault - back it up
   encrypted if at all, and never commit it or share it.
-- The scopes requested are read, send, modify, and labels (no "delete
-  everything" / account-level admin scopes).
+- **Least-privilege scope.** Connecting asks Google for one scope,
+  `gmail.modify`: read, draft, send and label mail, but never permanently
+  delete it, and no access to account settings beyond reading the Send-as
+  list. Accounts connected before this change still hold the older, broader
+  set (`gmail.readonly`, `gmail.send`, `gmail.labels`, `userinfo.email` on
+  top of `gmail.modify`) until you re-run `node src/auth.js <alias>`.
 - To fully revoke access (not just remove the local alias), go to
   https://myaccount.google.com/permissions and remove the app there too.
 - Running `node src/auth.js <alias>` again on an existing alias re-authorizes
@@ -371,6 +396,17 @@ attack arrives as ordinary email content.
 
 What limits the damage here:
 
+- **Email content is labeled as untrusted.** `get_message` bodies and
+  search snippets come back wrapped in `<untrusted_email_content>` tags,
+  with a notice telling Claude it's the sender's text and not instructions
+  to follow. The sender can't close the wrapper early, because look-alike
+  tags are stripped. This measurably helps but isn't a guarantee.
+- **Tools are labeled by risk.** Every tool carries MCP tool annotations:
+  the read tools are marked `readOnlyHint`, and `send_email`,
+  `delete_draft`, `modify_draft`, `modify_message_labels` and the
+  default-From tools are marked `destructiveHint`. Claude Desktop uses these hints when deciding what to
+  ask you about, so you can let the read-only tools run without prompts and
+  keep approval on the rest.
 - `send_email` only sends with `confirm_send: true`, and replies only ever
   become drafts. But Claude itself sets `confirm_send`, so this guards
   against mistakes more than against a determined injected instruction.

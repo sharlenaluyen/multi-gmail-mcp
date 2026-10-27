@@ -23,13 +23,10 @@ import {
 } from "./store.js";
 import { getAccountInfo, gmailClientFor, findSendAsAddress, formatFromHeader } from "./gmail.js";
 
-const SCOPES = [
-  "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/gmail.send",
-  "https://www.googleapis.com/auth/gmail.modify",
-  "https://www.googleapis.com/auth/gmail.labels",
-  "https://www.googleapis.com/auth/userinfo.email",
-];
+// gmail.modify alone covers everything this server does: reading, drafts,
+// sending, labels, and the Send-as list. It can't permanently delete mail.
+// The account's address comes from the Gmail profile, so no userinfo scope.
+const SCOPES = ["https://www.googleapis.com/auth/gmail.modify"];
 
 const NAME_PATTERN = /^[a-z0-9_-]+$/i;
 
@@ -75,8 +72,9 @@ async function connect(alias) {
   const { tokens } = await oauth2Client.getToken(code);
   oauth2Client.setCredentials(tokens);
 
-  const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
-  const { data } = await oauth2.userinfo.get();
+  const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+  const { data: profile } = await gmail.users.getProfile({ userId: "me" });
+  const data = { email: profile.emailAddress };
 
   const saved = await upsertAccount(alias, {
     email: data.email,
