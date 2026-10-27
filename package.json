@@ -4,6 +4,7 @@
   "description": "Local MCP server exposing multiple independently-authenticated Gmail accounts to Claude",
   "type": "module",
   "main": "src/server.js",
+  "license": "MIT",
   "scripts": {
     "auth": "node src/auth.js",
     "start": "node src/server.js",

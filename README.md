@@ -230,7 +230,7 @@ Just talk to Claude naturally:
 
 - "List my connected Gmail accounts"
 - "Search my work account for unread emails from legal"
-- "Check all my Gmail accounts for anything about the PostHog interview"
+- "Check all my Gmail accounts for anything about the XXXX interview"
 - "Draft a reply from my dodobumbum account to the last email in that thread"
 
 Claude will call `list_accounts` first if it doesn't already know your
@@ -309,17 +309,6 @@ wrong thing with your email." What's defended against:
   https://myaccount.google.com/permissions and remove the app there too.
 - Running `node src/auth.js <alias>` again on an existing alias re-authorizes
   and overwrites its token - useful if access was revoked or scopes changed.
-
-### On "CAP" for this server
-
-The CAP theorem (consistency / availability / partition tolerance) is a
-trade-off for *distributed* systems with replicated state - it doesn't
-directly apply here, since this is a single process with one local token
-file and no replicas to partition between. The practical equivalent that
-*does* apply - keeping that one file consistent under concurrent or
-interrupted writes - is handled by the atomic-write + serialized-write
-approach above, which is why it's called out explicitly rather than left
-implicit.
 
 ## Troubleshooting
 
