@@ -1,0 +1,27 @@
+{
+  "name": "multi-gmail-mcp",
+  "version": "1.2.0",
+  "description": "Local MCP server exposing multiple independently-authenticated Gmail accounts to Claude",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "auth": "node src/auth.js",
+    "start": "node src/server.js",
+    "accounts": "node src/auth.js --list",
+    "test": "node --test tests/*.test.js",
+    "lint": "eslint src tests",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.7.0",
+    "googleapis": "^188.0.0",
+    "open": "^10.1.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.13.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.10"
+  }
+}

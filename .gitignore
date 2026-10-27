@@ -1,0 +1,11 @@
+node_modules/
+
+# Google OAuth client secret - belongs in ~/.multi-gmail-mcp/, never in the repo
+credentials.json
+client_secret*.json
+
+# Local account tokens / audit log, in case they're ever copied here
+accounts.json
+*.log
+
+.DS_Store
