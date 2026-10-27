@@ -18,8 +18,12 @@ import {
   splitAddressList,
   removeAddress,
   listAttachmentParts,
+  fromAddressFor,
+  formatFromHeader,
+  findSendAsAddress,
 } from "./gmail.js";
 import { logAuditEvent } from "./audit.js";
+import { setDefaultFrom } from "./store.js";
 
 const server = new McpServer({
   name: "multi-gmail-mcp",
@@ -64,17 +68,61 @@ function jsonResult(obj) {
 
 defineTool(
   "list_accounts",
-  "List every Gmail account connected to this server, with its alias, any nicknames, and email address. A nickname can be passed anywhere an alias is accepted. Always call this first if you don't already know the aliases.",
+  "List every Gmail account connected to this server, with its alias, any nicknames, email address, and default_from (the From address used when sending or drafting from it). A nickname can be passed anywhere an alias is accepted. Always call this first if you don't already know the aliases.",
   {},
   async () => {
     const aliases = getConnectedAliases();
     const accounts = aliases.map((alias) => {
       const info = getAccountInfo(alias);
-      return { alias, nicknames: info.nicknames, email: info.email };
+      return { alias, nicknames: info.nicknames, email: info.email, default_from: fromAddressFor(info) };
     });
     return jsonResult({ accounts });
   }
 );
+
+defineTool(
+  "set_default_from",
+  `Set the From address used by default whenever this account sends, drafts, or drafts a reply. It must be one of the account's verified "Send mail as" addresses in Gmail settings - this checks with Gmail first and refuses anything else, because Gmail would otherwise silently send from the primary address instead.${aliasEnumHint()}`,
+  {
+    account: z.string(),
+    from_email: z.string().max(320).describe("Email address, e.g. me@example.com"),
+  },
+  async ({ account, from_email }) => {
+    const gmail = gmailClientFor(account);
+    const info = getAccountInfo(account);
+    const match = await findSendAsAddress(gmail, info, from_email);
+    const from = formatFromHeader(match.displayName, match.sendAsEmail);
+    await setDefaultFrom(info.alias, from);
+    return jsonResult({ account: info.alias, email: info.email, default_from: from });
+  }
+);
+
+defineTool(
+  "clear_default_from",
+  `Go back to sending from the account's primary address by default.${aliasEnumHint()}`,
+  { account: z.string() },
+  async ({ account }) => {
+    const info = getAccountInfo(account);
+    await setDefaultFrom(info.alias, null);
+    return jsonResult({ account: info.alias, email: info.email, default_from: info.email });
+  }
+);
+
+const fromOverride = z
+  .string()
+  .max(320)
+  .optional()
+  .describe(
+    "From address for just this message, overriding the account's default_from. Must be a verified Send mail as address."
+  );
+
+// A per-call From override is checked against Gmail's Send-as list the same
+// way set_default_from is; the saved default was already checked when set.
+async function resolveFrom(gmail, info, override) {
+  if (!override) return fromAddressFor(info);
+  const match = await findSendAsAddress(gmail, info, override);
+  return formatFromHeader(match.displayName, match.sendAsEmail);
+}
 
 // ---------------------------------------------------------------------------
 // Search / read
@@ -328,14 +376,16 @@ defineTool(
     body: z.string().max(2_000_000),
     cc: z.string().max(2000).optional(),
     bcc: z.string().max(2000).optional(),
+    from: fromOverride,
     confirm_send: z
       .boolean()
       .default(false)
       .describe("Must be explicitly true to actually send. False (default) returns a preview only."),
   },
-  async ({ account, to, subject, body, cc, bcc, confirm_send }) => {
+  async ({ account, to, subject, body, cc, bcc, from: fromArg, confirm_send }) => {
     const info = getAccountInfo(account);
-    const preview = { sent_from: info.email, to, cc, bcc, subject, body };
+    // The dry run never contacts Gmail, so an override is only verified on the real send.
+    const preview = { sent_from: fromArg || fromAddressFor(info), to, cc, bcc, subject, body };
 
     if (!confirm_send) {
       logAuditEvent({
@@ -343,7 +393,7 @@ defineTool(
         account,
         email: info.email,
         outcome: "dry_run",
-        detail: { to, subject },
+        detail: { from: preview.sent_from, to, subject },
       });
       return jsonResult({
         dry_run: true,
@@ -353,7 +403,8 @@ defineTool(
     }
 
     const gmail = gmailClientFor(account);
-    const raw = buildRawMessage({ to, cc, bcc, subject, body, from: info.email });
+    const from = await resolveFrom(gmail, info, fromArg);
+    const raw = buildRawMessage({ to, cc, bcc, subject, body, from });
     try {
       const { data } = await gmail.users.messages.send({ userId: "me", requestBody: { raw } });
       logAuditEvent({
@@ -361,9 +412,9 @@ defineTool(
         account,
         email: info.email,
         outcome: "sent",
-        detail: { to, subject, message_id: data.id },
+        detail: { from, to, subject, message_id: data.id },
       });
-      return jsonResult({ sent_from: info.email, message_id: data.id, threadId: data.threadId });
+      return jsonResult({ sent_from: from, message_id: data.id, threadId: data.threadId });
     } catch (err) {
       logAuditEvent({
         action: "send_email",
@@ -388,10 +439,12 @@ defineTool(
       .boolean()
       .default(false)
       .describe("Also Cc everyone who was on the original To/Cc, not just the original sender"),
+    from: fromOverride,
   },
-  async ({ account, message_id, body, reply_all }) => {
+  async ({ account, message_id, body, reply_all, from: fromArg }) => {
     const gmail = gmailClientFor(account);
     const info = getAccountInfo(account);
+    const from = await resolveFrom(gmail, info, fromArg);
 
     const { data: original } = await withRetry(() =>
       gmail.users.messages.get({
@@ -414,7 +467,7 @@ defineTool(
         ...splitAddressList(headerValue(headers, "To")),
         ...splitAddressList(headerValue(headers, "Cc")),
       ];
-      const withoutSelf = removeAddress(combined, info.email);
+      const withoutSelf = removeAddress(removeAddress(combined, info.email), from);
       const withoutReplyTarget = removeAddress(withoutSelf, originalFrom);
       cc = withoutReplyTarget.length ? withoutReplyTarget.join(", ") : undefined;
     }
@@ -426,7 +479,7 @@ defineTool(
       cc,
       subject,
       body,
-      from: info.email,
+      from,
       inReplyTo: originalMessageId,
       references,
     });
@@ -451,6 +504,7 @@ defineTool(
         draft_id: data.id,
         message_id: data.message?.id,
         threadId: data.message?.threadId,
+        from,
         to,
         cc,
         subject,
@@ -482,15 +536,17 @@ defineTool(
     body: z.string().max(2_000_000),
     cc: z.string().max(2000).optional(),
     bcc: z.string().max(2000).optional(),
+    from: fromOverride,
   },
-  async ({ account, to, subject, body, cc, bcc }) => {
+  async ({ account, to, subject, body, cc, bcc, from: fromArg }) => {
     const gmail = gmailClientFor(account);
     const info = getAccountInfo(account);
-    const raw = buildRawMessage({ to, cc, bcc, subject, body, from: info.email });
+    const from = await resolveFrom(gmail, info, fromArg);
+    const raw = buildRawMessage({ to, cc, bcc, subject, body, from });
     const { data } = await withRetry(() =>
       gmail.users.drafts.create({ userId: "me", requestBody: { message: { raw } } })
     );
-    return jsonResult({ account: info.email, draft_id: data.id, message_id: data.message?.id });
+    return jsonResult({ account: info.email, from, draft_id: data.id, message_id: data.message?.id });
   }
 );
 
@@ -530,7 +586,7 @@ defineTool(
 
 defineTool(
   "modify_draft",
-  `Replace a draft's recipient, subject, and body all at once. Any field left out keeps its current value.${aliasEnumHint()}`,
+  `Replace a draft's recipient, subject, body, and/or From address all at once. Any field left out keeps its current value.${aliasEnumHint()}`,
   {
     account: z.string(),
     draft_id: z.string(),
@@ -539,21 +595,31 @@ defineTool(
     body: z.string().max(2_000_000).optional(),
     cc: z.string().max(2000).optional(),
     bcc: z.string().max(2000).optional(),
+    from: fromOverride.describe(
+      "New From address for this draft. Left out, the draft keeps its current From."
+    ),
   },
-  async ({ account, draft_id, to, subject, body, cc, bcc }) => {
+  async ({ account, draft_id, to, subject, body, cc, bcc, from: fromArg }) => {
     const gmail = gmailClientFor(account);
     const info = getAccountInfo(account);
     const current = await getDraftFields(gmail, draft_id);
+    const from = fromArg ? await resolveFrom(gmail, info, fromArg) : current.from || fromAddressFor(info);
     const raw = buildRawMessage({
       to: to ?? current.to,
       cc: cc ?? current.cc,
       bcc: bcc ?? current.bcc,
       subject: subject ?? current.subject,
       body: body ?? current.body,
-      from: info.email,
+      from,
+      inReplyTo: current.inReplyTo,
+      references: current.references,
     });
     const { data } = await withRetry(() =>
-      gmail.users.drafts.update({ userId: "me", id: draft_id, requestBody: { message: { raw } } })
+      gmail.users.drafts.update({
+        userId: "me",
+        id: draft_id,
+        requestBody: { message: { raw, threadId: current.threadId } },
+      })
     );
     return jsonResult({ account: info.email, draft_id: data.id, message_id: data.message?.id });
   }
@@ -567,9 +633,13 @@ defineTool(
     const gmail = gmailClientFor(account);
     const info = getAccountInfo(account);
     const current = await getDraftFields(gmail, draft_id);
-    const raw = buildRawMessage({ ...current, to, from: info.email });
+    const raw = buildRawMessage({ ...current, to, from: current.from || fromAddressFor(info) });
     const { data } = await withRetry(() =>
-      gmail.users.drafts.update({ userId: "me", id: draft_id, requestBody: { message: { raw } } })
+      gmail.users.drafts.update({
+        userId: "me",
+        id: draft_id,
+        requestBody: { message: { raw, threadId: current.threadId } },
+      })
     );
     return jsonResult({ account: info.email, draft_id: data.id, to });
   }
@@ -583,9 +653,13 @@ defineTool(
     const gmail = gmailClientFor(account);
     const info = getAccountInfo(account);
     const current = await getDraftFields(gmail, draft_id);
-    const raw = buildRawMessage({ ...current, subject, from: info.email });
+    const raw = buildRawMessage({ ...current, subject, from: current.from || fromAddressFor(info) });
     const { data } = await withRetry(() =>
-      gmail.users.drafts.update({ userId: "me", id: draft_id, requestBody: { message: { raw } } })
+      gmail.users.drafts.update({
+        userId: "me",
+        id: draft_id,
+        requestBody: { message: { raw, threadId: current.threadId } },
+      })
     );
     return jsonResult({ account: info.email, draft_id: data.id, subject });
   }
@@ -599,9 +673,13 @@ defineTool(
     const gmail = gmailClientFor(account);
     const info = getAccountInfo(account);
     const current = await getDraftFields(gmail, draft_id);
-    const raw = buildRawMessage({ ...current, body, from: info.email });
+    const raw = buildRawMessage({ ...current, body, from: current.from || fromAddressFor(info) });
     const { data } = await withRetry(() =>
-      gmail.users.drafts.update({ userId: "me", id: draft_id, requestBody: { message: { raw } } })
+      gmail.users.drafts.update({
+        userId: "me",
+        id: draft_id,
+        requestBody: { message: { raw, threadId: current.threadId } },
+      })
     );
     return jsonResult({ account: info.email, draft_id: data.id });
   }
@@ -638,11 +716,15 @@ defineTool(
 
     const raw = buildRawMessage({
       ...current,
-      from: info.email,
+      from: current.from || fromAddressFor(info),
       attachments: [{ filename, mimeType: guessMimeType(filename), contentBase64 }],
     });
     const { data } = await withRetry(() =>
-      gmail.users.drafts.update({ userId: "me", id: draft_id, requestBody: { message: { raw } } })
+      gmail.users.drafts.update({
+        userId: "me",
+        id: draft_id,
+        requestBody: { message: { raw, threadId: current.threadId } },
+      })
     );
     return jsonResult({ account: info.email, draft_id: data.id, attached: filename, size_bytes: stat.size });
   }

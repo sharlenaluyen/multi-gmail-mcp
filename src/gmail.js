@@ -284,6 +284,44 @@ export function removeAddress(list, addressToRemove) {
   return list.filter((a) => extractEmailAddress(a) !== target);
 }
 
+// --- From address ---------------------------------------------------------
+// The From header for a new message: a per-call override, else the account's
+// saved default_from, else its primary address.
+export function fromAddressFor(info, override) {
+  return override || info.default_from || info.email;
+}
+
+export function formatFromHeader(displayName, email) {
+  const name = (displayName || "").replace(/["\\]/g, "").trim();
+  if (!name) return email;
+  const encoded = encodeHeaderIfNeeded(name);
+  return encoded === name ? `"${name}" <${email}>` : `${encoded} <${email}>`;
+}
+
+// Gmail silently rewrites From to the primary address when it isn't one of
+// the account's verified "Send mail as" addresses, so check before relying on
+// one. Returns the matching sendAs entry; throws with the valid options if
+// there is none.
+export async function findSendAsAddress(gmail, info, address) {
+  const wanted = extractEmailAddress(address);
+  const { data } = await withRetry(() => gmail.users.settings.sendAs.list({ userId: "me" }));
+  const sendAs = data.sendAs || [];
+  const usable = sendAs.filter((s) => s.isPrimary || s.verificationStatus === "accepted");
+  const match = sendAs.find((s) => s.sendAsEmail.toLowerCase() === wanted);
+  const options = usable.map((s) => s.sendAsEmail).join(", ");
+  if (!match) {
+    throw new Error(
+      `${wanted} isn't a "Send mail as" address on ${info.email}. Add it in Gmail Settings -> Accounts -> Send mail as. Usable addresses: ${options}`
+    );
+  }
+  if (!usable.includes(match)) {
+    throw new Error(
+      `${wanted} is set up on ${info.email} but not verified yet (status: ${match.verificationStatus}). Usable addresses: ${options}`
+    );
+  }
+  return match;
+}
+
 // --- Attachments ----------------------------------------------------------
 // Walk a message payload tree and collect every part that represents a real
 // attachment (has a filename and an attachmentId) as opposed to an inline
@@ -319,6 +357,9 @@ export async function getDraftFields(gmail, draftId) {
     bcc: headerValue(payload?.headers, "Bcc"),
     subject: headerValue(payload?.headers, "Subject"),
     from: headerValue(payload?.headers, "From"),
+    // Reply headers, so rebuilding a reply draft keeps it threaded.
+    inReplyTo: headerValue(payload?.headers, "In-Reply-To"),
+    references: headerValue(payload?.headers, "References"),
     body: extractPlainTextBody(payload),
   };
 }

@@ -103,3 +103,13 @@ test("gmail.js resolves nicknames and lists each mailbox once", async () => {
   assert.ok(!aliases.includes("other"));
   assert.throws(() => getAccountInfo("nope"), /Connected aliases: .*other/);
 });
+
+test("setDefaultFrom saves and clears default_from, and re-authorizing keeps it", async () => {
+  await store.setDefaultFrom("other", '"Me" <me@custom.com>'); // via a nickname
+  assert.equal(store.loadAccounts().main.default_from, '"Me" <me@custom.com>');
+  await store.upsertAccount("main", { email: "same@x.com", refresh_token: "fresh" });
+  assert.equal(store.loadAccounts().main.default_from, '"Me" <me@custom.com>');
+  await store.setDefaultFrom("main", null);
+  assert.equal(store.loadAccounts().main.default_from, undefined);
+  await assert.rejects(store.setDefaultFrom("nope", "x@y.com"), /Unknown account alias/);
+});

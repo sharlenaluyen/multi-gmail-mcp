@@ -5,6 +5,8 @@
 //   node src/auth.js --remove <alias> -> disconnect an account
 //   node src/auth.js --nick <alias> <nickname> -> add another name for an account
 //   node src/auth.js --unnick <nickname>       -> remove a nickname
+//   node src/auth.js --from <alias> [email]    -> show or set the default From address
+//   node src/auth.js --from-clear <alias>      -> send from the primary address again
 
 import http from "http";
 import { URL } from "url";
@@ -17,7 +19,9 @@ import {
   removeAccount,
   addNickname,
   removeNickname,
+  setDefaultFrom,
 } from "./store.js";
+import { getAccountInfo, gmailClientFor, findSendAsAddress, formatFromHeader } from "./gmail.js";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
@@ -35,6 +39,8 @@ function parseArgs() {
   if (args[0] === "--remove") return { cmd: "remove", alias: args[1] };
   if (args[0] === "--nick") return { cmd: "nick", alias: args[1], nickname: args[2] };
   if (args[0] === "--unnick") return { cmd: "unnick", nickname: args[1] };
+  if (args[0] === "--from") return { cmd: "from", alias: args[1], email: args[2] };
+  if (args[0] === "--from-clear") return { cmd: "from-clear", alias: args[1] };
   if (args[0] && !args[0].startsWith("--")) return { cmd: "connect", alias: args[0] };
   return { cmd: "help" };
 }
@@ -126,7 +132,8 @@ async function list() {
   for (const alias of aliases) {
     const nicknames = accounts[alias].nicknames || [];
     const also = nicknames.length ? `  (also: ${nicknames.join(", ")})` : "";
-    console.log(`  ${alias}  ->  ${accounts[alias].email}${also}`);
+    const from = accounts[alias].default_from ? `  [sends as ${accounts[alias].default_from}]` : "";
+    console.log(`  ${alias}  ->  ${accounts[alias].email}${also}${from}`);
   }
   console.log("");
 }
@@ -165,6 +172,44 @@ async function unnick(nickname) {
   console.log(`Removed nickname "${nickname}" from account "${owner}".`);
 }
 
+// Same check as the set_default_from tool: only a verified Send-as address
+// is accepted, since Gmail silently falls back to the primary otherwise.
+async function from(alias, email) {
+  if (!alias) {
+    console.error("Usage: node src/auth.js --from <alias> [email]");
+    process.exit(1);
+  }
+  let info;
+  try {
+    info = getAccountInfo(alias);
+  } catch (err) {
+    fail(err);
+  }
+  const gmail = gmailClientFor(alias);
+  if (!email) {
+    const { data } = await gmail.users.settings.sendAs.list({ userId: "me" }).catch(fail);
+    const usable = (data.sendAs || []).filter((s) => s.isPrimary || s.verificationStatus === "accepted");
+    console.log(`"${info.alias}" currently sends as ${info.default_from || info.email}\n`);
+    console.log("Verified addresses you can use:");
+    for (const s of usable) console.log(`  ${s.sendAsEmail}${s.isPrimary ? "  (primary)" : ""}`);
+    console.log(`\nSet one with: node src/auth.js --from ${info.alias} <email>`);
+    return;
+  }
+  const match = await findSendAsAddress(gmail, info, email).catch(fail);
+  const header = formatFromHeader(match.displayName, match.sendAsEmail);
+  await setDefaultFrom(info.alias, header).catch(fail);
+  console.log(`"${info.alias}" now sends as ${header}.`);
+}
+
+async function fromClear(alias) {
+  if (!alias) {
+    console.error("Usage: node src/auth.js --from-clear <alias>");
+    process.exit(1);
+  }
+  const owner = await setDefaultFrom(alias, null).catch(fail);
+  console.log(`"${owner}" now sends from its primary address.`);
+}
+
 function help() {
   console.log(`
 Multi-Gmail MCP - account setup
@@ -176,19 +221,27 @@ Multi-Gmail MCP - account setup
                                     add another name for an already-connected account
   node src/auth.js --unnick <nickname>
                                     remove a nickname (the account stays connected)
+  node src/auth.js --from <alias> [email]
+                                    show the account's verified Send-as addresses,
+                                    or make <email> its default From address
+  node src/auth.js --from-clear <alias>
+                                    send from the account's primary address again
 
 Example:
   node src/auth.js personal
   node src/auth.js work
   node src/auth.js dodobumbum
   node src/auth.js --nick dodobumbum dodo
+  node src/auth.js --from dodobumbum inquiries@dodobumbum.com
 `);
 }
 
-const { cmd, alias, nickname } = parseArgs();
+const { cmd, alias, nickname, email } = parseArgs();
 if (cmd === "connect") await connect(alias);
 else if (cmd === "list") await list();
 else if (cmd === "remove") await remove(alias);
 else if (cmd === "nick") await nick(alias, nickname);
 else if (cmd === "unnick") await unnick(nickname);
+else if (cmd === "from") await from(alias, email);
+else if (cmd === "from-clear") await fromClear(alias);
 else help();

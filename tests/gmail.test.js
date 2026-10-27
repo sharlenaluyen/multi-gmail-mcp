@@ -12,6 +12,10 @@ import {
   splitAddressList,
   removeAddress,
   listAttachmentParts,
+  fromAddressFor,
+  formatFromHeader,
+  findSendAsAddress,
+  getDraftFields,
 } from "../src/gmail.js";
 
 function decodeRaw(raw) {
@@ -187,4 +191,78 @@ test("listAttachmentParts finds real attachments and skips inline body parts", (
   assert.equal(atts[0].filename, "report.pdf");
   assert.equal(atts[0].attachmentId, "ATT1");
   assert.equal(atts[1].filename, "logo.png");
+});
+
+test("fromAddressFor prefers a per-call override, then default_from, then the primary address", () => {
+  const info = { email: "me@gmail.com", default_from: "me@custom.com" };
+  assert.equal(fromAddressFor(info, "other@custom.com"), "other@custom.com");
+  assert.equal(fromAddressFor(info), "me@custom.com");
+  assert.equal(fromAddressFor({ email: "me@gmail.com" }), "me@gmail.com");
+});
+
+test("formatFromHeader adds a display name, stripping quotes and encoding non-ASCII", () => {
+  assert.equal(formatFromHeader("", "me@x.com"), "me@x.com");
+  assert.equal(formatFromHeader('Sha "S" Lena', "me@x.com"), '"Sha S Lena" <me@x.com>');
+  assert.match(formatFromHeader("Zoë", "me@x.com"), /^=\?UTF-8\?B\?.+\?= <me@x\.com>$/);
+});
+
+function fakeGmail(sendAs) {
+  return { users: { settings: { sendAs: { list: async () => ({ data: { sendAs } }) } } } };
+}
+const SEND_AS = [
+  { sendAsEmail: "me@gmail.com", isPrimary: true },
+  { sendAsEmail: "me@custom.com", displayName: "Me", verificationStatus: "accepted" },
+  { sendAsEmail: "pending@custom.com", verificationStatus: "pending" },
+];
+
+test("findSendAsAddress accepts a verified Send-as address, case-insensitively", async () => {
+  const match = await findSendAsAddress(fakeGmail(SEND_AS), { email: "me@gmail.com" }, "Me <ME@custom.com>");
+  assert.equal(match.sendAsEmail, "me@custom.com");
+});
+
+test("findSendAsAddress refuses unknown and unverified addresses, listing usable ones", async () => {
+  const info = { email: "me@gmail.com" };
+  await assert.rejects(
+    findSendAsAddress(fakeGmail(SEND_AS), info, "nope@x.com"),
+    /isn't a "Send mail as".*me@custom\.com/
+  );
+  await assert.rejects(findSendAsAddress(fakeGmail(SEND_AS), info, "pending@custom.com"), /not verified yet/);
+});
+
+test("a draft's custom From survives a single-field edit", () => {
+  // Mirrors the draft-edit tools: rebuild from the draft's current fields.
+  const current = { to: "a@x.com", subject: "S", body: "B", from: '"Me" <me@custom.com>' };
+  const raw = buildRawMessage({
+    ...current,
+    subject: "New",
+    from: current.from || fromAddressFor({ email: "me@gmail.com" }),
+  });
+  assert.match(decodeRaw(raw), /From: "Me" <me@custom\.com>/);
+});
+
+test("getDraftFields keeps a reply draft's thread and reply headers so edits stay threaded", async () => {
+  const headers = [
+    { name: "To", value: "a@x.com" },
+    { name: "Subject", value: "Re: Hi" },
+    { name: "From", value: "me@custom.com" },
+    { name: "In-Reply-To", value: "<orig@x.com>" },
+    { name: "References", value: "<root@x.com> <orig@x.com>" },
+  ];
+  const gmail = {
+    users: {
+      drafts: {
+        get: async () => ({
+          data: {
+            id: "d1",
+            message: { id: "m1", threadId: "t1", payload: { headers, mimeType: "text/plain", body: {} } },
+          },
+        }),
+      },
+    },
+  };
+  const current = await getDraftFields(gmail, "d1");
+  assert.equal(current.threadId, "t1");
+  const raw = decodeRaw(buildRawMessage({ ...current, subject: "Re: Hi (edited)" }));
+  assert.match(raw, /In-Reply-To: <orig@x\.com>/);
+  assert.match(raw, /References: <root@x\.com> <orig@x\.com>/);
 });

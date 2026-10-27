@@ -131,6 +131,21 @@ export function removeNickname(nickname) {
   });
 }
 
+// Saves (or with `from` = null, clears) the From header used by default when
+// sending or drafting from this account, e.g. a verified "Send mail as" alias.
+// Re-authorizing keeps it, since upsertAccount merges into the entry.
+export function setDefaultFrom(name, from) {
+  return serialized(() => {
+    const accounts = loadAccounts();
+    const alias = resolveAlias(accounts, name);
+    if (!alias) throw new Error(`Unknown account alias "${name}".`);
+    if (from) accounts[alias].default_from = from;
+    else delete accounts[alias].default_from;
+    saveAccounts(accounts);
+    return alias;
+  });
+}
+
 // Removes the whole account (token and all nicknames). Refuses a nickname so
 // a typo can't disconnect a mailbox you meant to keep.
 export function removeAccount(alias) {
