@@ -126,19 +126,6 @@ node auth.js work
 node auth.js --list
 ```
 
-**Already using multi-gmail-mcp 1.x?** Your accounts are in the old
-`~/.multi-gmail-mcp/` folder, which this version no longer reads. Copy them
-over once:
-
-```bash
-cd ../google-mcp-accounts
-node auth.js --import-legacy   # copies accounts.json + credentials.json; never overwrites
-```
-
-Imported accounts keep their nicknames and default From address, and Gmail
-works right away. Re-run `node auth.js <alias>` for each one when you want
-to add Calendar/Drive/Docs/Sheets/Slides access too.
-
 Inside this repo, `npm run auth -- <alias>` and `npm run accounts` call the
 same shared CLI.
 
