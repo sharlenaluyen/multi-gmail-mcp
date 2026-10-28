@@ -18,6 +18,7 @@ import {
   getDraftFields,
   markUntrusted,
   loadDraftAttachments,
+  threadReplyState,
 } from "../src/gmail.js";
 
 function decodeRaw(raw) {
@@ -376,4 +377,36 @@ test("an HTML-only draft keeps its HTML instead of turning it into visible plain
     buildRawMessage({ to: "a@x.com", subject: "S", body: current.body, html: current.html })
   );
   assert.match(raw, /Content-Type: text\/html; charset="UTF-8"\r\n\r\n<p>hi<\/p>/);
+});
+
+test("threadReplyState: someone else wrote last, so the thread awaits a reply", () => {
+  const state = threadReplyState([
+    { id: "1", labelIds: ["INBOX"] },
+    { id: "2", labelIds: ["SENT"] },
+    { id: "3", labelIds: ["INBOX", "UNREAD"] },
+  ]);
+  assert.equal(state.message_count, 3);
+  assert.equal(state.last_message_from_you, false);
+  assert.equal(state.awaiting_your_reply, true);
+  assert.equal(state.last_reply_from_you_id, "2");
+  assert.equal(state.last_message_from_them_id, "3");
+  assert.equal(state.has_draft_reply, false);
+});
+
+test("threadReplyState: your message last means already replied; drafts don't count as replies", () => {
+  const state = threadReplyState([
+    { id: "1", labelIds: ["INBOX"] },
+    { id: "2", labelIds: ["SENT", "INBOX"] },
+    { id: "3", labelIds: ["DRAFT"] },
+  ]);
+  assert.equal(state.message_count, 2);
+  assert.equal(state.last_message_from_you, true);
+  assert.equal(state.awaiting_your_reply, false);
+  assert.equal(state.has_draft_reply, true);
+});
+
+test("threadReplyState: empty thread", () => {
+  const state = threadReplyState([]);
+  assert.equal(state.message_count, 0);
+  assert.equal(state.awaiting_your_reply, false);
 });

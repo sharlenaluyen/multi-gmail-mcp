@@ -15,6 +15,10 @@ Read/search:
 - `search_emails` - search one account with Gmail query syntax
 - `search_all_accounts` - run the same search across every connected account
 - `get_message` - fetch full body/headers of one email
+- `get_thread` - every message in a thread, oldest first, plus a
+  `reply_state` summary: whether the last message is yours, whether the
+  thread is `awaiting_your_reply`, and whether a draft reply already exists.
+  This is the "have I already replied?" check
 - `get_recipient` - just the To/Cc/Bcc of a message or draft
 - `get_subject_line` - just the subject of a message or draft
 - `get_status` - sent / draft / trash / spam / inbox / archived / read / unread / starred
@@ -213,9 +217,17 @@ To use a different folder, add an `env` entry to the same config:
 "multi-gmail": {
   "command": "node",
   "args": ["/absolute/path/to/multi-gmail-mcp/src/server.js"],
-  "env": { "MULTI_GMAIL_MCP_FILES_DIR": "/Users/you/gmail-files" }
+  "env": { "MULTI_GMAIL_MCP_FILES_DIR": "/Users/you/Downloads/google-mcp-files" }
 }
 ```
+
+**To attach Drive files to emails, give this server and multi-gdrive-mcp
+the same folder.** Set `MULTI_GDRIVE_MCP_FILES_DIR` to the same path as
+`MULTI_GMAIL_MCP_FILES_DIR`. Then a file saved by Drive's `download_file` is
+right where `attach_document` looks. Without this, the two servers use
+different folders and Claude can't hand a file from one to the other. Only
+the config changes, no code. See "One files folder for all the servers" in
+google-mcp-accounts' README.
 
 ## 4. Use it
 

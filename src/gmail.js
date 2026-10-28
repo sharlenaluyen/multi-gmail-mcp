@@ -301,6 +301,28 @@ export function markUntrusted(text) {
   return `<untrusted_email_content>\n${cleaned}\n</untrusted_email_content>`;
 }
 
+// --- Thread reply state -----------------------------------------------------
+// Whether a thread is waiting on this account, from labels alone: Gmail puts
+// SENT on every message the account sent (from any Send-as address), and
+// DRAFT on unsent drafts, which also show up in the thread. Messages are in
+// thread order, oldest first.
+export function threadReplyState(messages) {
+  const sent = (messages || []).filter((m) => !m.labelIds?.includes("DRAFT"));
+  const isMine = (m) => Boolean(m.labelIds?.includes("SENT"));
+  const last = sent[sent.length - 1];
+  const lastFromThem = [...sent].reverse().find((m) => !isMine(m));
+  const lastFromMe = [...sent].reverse().find(isMine);
+  return {
+    message_count: sent.length,
+    last_message_from_you: last ? isMine(last) : false,
+    // True when someone else wrote last - the thread is waiting on you.
+    awaiting_your_reply: last ? !isMine(last) : false,
+    last_reply_from_you_id: lastFromMe?.id,
+    last_message_from_them_id: lastFromThem?.id,
+    has_draft_reply: (messages || []).some((m) => m.labelIds?.includes("DRAFT")),
+  };
+}
+
 // --- From address ---------------------------------------------------------
 // The From header for a new message: a per-call override, else the account's
 // saved default_from, else its primary address.
