@@ -1,43 +1,36 @@
 import { google } from "googleapis";
-import { loadCredentials, loadAccounts, resolveAlias } from "./store.js";
+import {
+  getConnectedAliases,
+  getAccountInfo,
+  createAuthClient,
+  setAccountField,
+  withRetry,
+  REQUIRED_SCOPES,
+} from "google-mcp-accounts";
+
+// Account lookup and retry live in the shared google-mcp-accounts package;
+// re-exported so the rest of this server keeps importing them from here.
+export { getConnectedAliases, getAccountInfo, withRetry };
 
 // Cache one authed gmail client per account (keyed by main alias) per process run.
 const clientCache = new Map();
-
-// One main alias per connected mailbox - nicknames are not included, so
-// anything that loops over these touches each mailbox exactly once.
-export function getConnectedAliases() {
-  return Object.keys(loadAccounts());
-}
-
-// Accepts a main alias or a nickname. The returned info includes `alias`,
-// the main alias it resolved to.
-export function getAccountInfo(name) {
-  const accounts = loadAccounts();
-  const alias = resolveAlias(accounts, name);
-  if (!alias) {
-    const known =
-      Object.keys(accounts)
-        .flatMap((a) => [a, ...(accounts[a].nicknames || [])])
-        .join(", ") || "(none connected)";
-    throw new Error(`Unknown account alias "${name}". Connected aliases: ${known}`);
-  }
-  return { alias, nicknames: [], ...accounts[alias] };
-}
 
 export function gmailClientFor(name) {
   const acct = getAccountInfo(name);
   const alias = acct.alias;
   if (clientCache.has(alias)) return clientCache.get(alias);
 
-  const { clientId, clientSecret, redirectUri } = loadCredentials();
-
-  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-  oauth2Client.setCredentials({ refresh_token: acct.refresh_token });
-
-  const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+  const auth = createAuthClient(alias, { OAuth2: google.auth.OAuth2, requiredScopes: REQUIRED_SCOPES.gmail });
+  const gmail = google.gmail({ version: "v1", auth });
   clientCache.set(alias, gmail);
   return gmail;
+}
+
+// Saves (or with `from` = null, clears) the From header used by default when
+// sending or drafting from this account, e.g. a verified "Send mail as" alias.
+// Goes through the shared store's serialized, atomic write path.
+export function setDefaultFrom(name, from) {
+  return setAccountField(name, "default_from", from);
 }
 
 function b64urlEncode(buf) {
@@ -236,29 +229,6 @@ export function computeStatus(labelIds) {
   flags.push(labels.has("UNREAD") ? "unread" : "read");
   if (labels.has("STARRED")) flags.push("starred");
   return flags;
-}
-
-// --- Retry with backoff -------------------------------------------------
-// Gmail's API returns 429 (rate limit) and transient 5xx errors under load.
-// Retrying a *read* is always safe; we only apply this wrapper to idempotent
-// calls (reads, and label modifications, which are idempotent by nature) -
-// callers decide which calls get wrapped. Sends/drafts are deliberately
-// never silently retried, to avoid a double-send on a flaky connection.
-export async function withRetry(fn, { retries = 3, baseDelayMs = 300 } = {}) {
-  let lastErr;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      const status = err?.code || err?.response?.status;
-      const retryable = status === 429 || (status >= 500 && status < 600);
-      if (!retryable || attempt === retries) break;
-      const delay = baseDelayMs * 2 ** attempt + Math.random() * 100;
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-  throw lastErr;
 }
 
 // --- MIME type guessing for attachments ----------------------------------

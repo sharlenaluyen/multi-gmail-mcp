@@ -59,9 +59,9 @@ account. Just tell Claude, for example:
 Or set it yourself from the terminal, without Claude:
 
 ```bash
-node src/auth.js --from aibusiness                  # show verified addresses + current default
-node src/auth.js --from aibusiness me@sharlena.me   # set the default
-node src/auth.js --from-clear aibusiness            # back to the primary address
+npm run from -- aibusiness                    # show verified addresses + current default
+npm run from -- aibusiness me@sharlena.me     # set the default
+npm run from -- --clear aibusiness            # back to the primary address
 ```
 
 Asking Claude is easier, since you can do it mid-conversation in plain
@@ -74,7 +74,7 @@ setting, so the terminal is the better place for it.
 
 After that, `send_email`, `create_draft` and `draft_reply_to_message` from
 that account all use it automatically. `list_accounts` (and
-`node src/auth.js --list`) shows which address each account sends as.
+google-mcp-accounts' `node auth.js --list`) shows which address each account sends as.
 
 - **Verified addresses only.** `set_default_from` checks the address against
   the account's Send-as list in Gmail first. Gmail silently sends from the
@@ -106,152 +106,89 @@ follow-up call. Every other send-shaped action (replying) only ever produces
 a draft - there is no confirm flag for it because there is nothing to
 confirm; it's already stopped short of sending.
 
-## 1. Install dependencies
+## 1. Accounts live in google-mcp-accounts
 
-You already have a Google Cloud project with OAuth credentials, so skip to
-step 2 if you just need the client JSON downloaded again.
+Logging in is handled by the sibling repo
+[google-mcp-accounts](../google-mcp-accounts), which is shared by all four
+Google MCP servers (Gmail, Calendar, Drive, Docs/Sheets/Slides). You
+authorize each Google account **once**, in one consent screen, and every
+server can use it. Tokens live in `~/.google-mcp/accounts.json`, and the
+OAuth client file lives at `~/.google-mcp/credentials.json`.
+
+Set that repo up first. Its README covers the OAuth client file, the scopes,
+and the CLI:
 
 ```bash
-cd multi-gmail-mcp
+cd ../google-mcp-accounts
 npm install
+node auth.js personal          # once per Google account
+node auth.js work
+node auth.js --list
 ```
 
-Requires Node.js 18+.
-
-## 2. Get your Google OAuth client file in place
-
-1. Google Cloud Console -> **APIs & Services -> Credentials**
-2. Your OAuth 2.0 Client should be type **Desktop app** (if it's a "Web
-   application" client instead, add `http://localhost:53682/oauth2callback`
-   to its Authorized redirect URIs).
-3. Make sure the **Gmail API** is enabled for the project (APIs & Services ->
-   Library -> Gmail API -> Enable).
-4. Download the client JSON ("Download OAuth client") and save it exactly at:
-
-   ```
-   ~/.multi-gmail-mcp/credentials.json
-   ```
-
-   Create the folder if it doesn't exist, and copy the file in (this is the
-   only place the server looks - a `credentials.json` in the project folder
-   is ignored):
-   ```bash
-   mkdir -p ~/.multi-gmail-mcp
-   cp /path/to/downloaded/credentials.json ~/.multi-gmail-mcp/credentials.json
-   chmod 600 ~/.multi-gmail-mcp/credentials.json
-   ```
-
-   The file contains your client secret, so don't leave a copy inside the
-   project folder where it could get committed.
-
-A Desktop-app client file lists its redirect as a bare `http://localhost`
-with no port. That's expected: Google accepts any loopback port for Desktop
-clients, so `auth.js` pins port 53682, listens there, and sends Google that
-same URI. You don't need to configure any redirect URI yourself.
-
-If your Google Cloud OAuth consent screen is in "Testing" mode, add each
-Gmail address you plan to connect as a **test user** under OAuth consent
-screen settings, or Google will block the sign-in. (Google Auth Platform -> Audience -> scroll to Test Users)
-
-One wrinkle to know about: Testing-mode apps also cap you at 100 test users
-total (not a concern here), and refresh tokens issued while in Testing mode
-expire after 7 days of the app being untouched - so if you connect an
-account and then don't use this server for a week, that account's token may
-go stale and you'll need to re-run `node src/auth.js <alias>` to reconnect
-it. If that becomes annoying, the fix is flipping **Publishing status** to
-**Production** later - but that's optional and not something you need to do
-now.
-
-## 3. Connect each Gmail account
-
-Run this once per account, giving each one a short alias you'll use when
-talking to Claude:
+**Already using multi-gmail-mcp 1.x?** Your accounts are in the old
+`~/.multi-gmail-mcp/` folder, which this version no longer reads. Copy them
+over once:
 
 ```bash
-node src/auth.js personal
-node src/auth.js work
-node src/auth.js business
+cd ../google-mcp-accounts
+node auth.js --import-legacy   # copies accounts.json + credentials.json; never overwrites
 ```
 
-Run these from the project folder. Each run opens your browser, you sign in
-and approve access, and the alias gets saved locally at
-`~/.multi-gmail-mcp/accounts.json` (refresh tokens only - nothing leaves
-your machine). When it works, the terminal prints
-`Connected: alias "personal" -> you@gmail.com`.
+Imported accounts keep their nicknames and default From address, and Gmail
+works right away. Re-run `node auth.js <alias>` for each one when you want
+to add Calendar/Drive/Docs/Sheets/Slides access too.
 
-What to expect in the browser:
+Inside this repo, `npm run auth -- <alias>` and `npm run accounts` call the
+same shared CLI.
 
-- **"Google hasn't verified this app."** Normal while the app is in Testing
-  mode. Click **Advanced -> Go to (app name)**, then approve the Gmail
-  access.
-- **Pick the right account.** If your browser is signed into several Google
-  accounts, choose the one that matches the alias on Google's account
-  chooser - whichever account you pick is the one saved under that alias.
+### Scopes
 
-If it goes wrong:
-
-- **"Access blocked" / `access_denied`** - the address you signed in with
-  isn't on the test-user list exactly as entered.
-- **"No Google OAuth client credentials found"** - `credentials.json` isn't
-  at `~/.multi-gmail-mcp/credentials.json` (see step 2).
-
-Check what's connected any time:
-
-```bash
-node src/auth.js --list
-```
-
-Disconnect one:
-
-```bash
-node src/auth.js --remove work
-```
-
-This removes the whole account, nicknames included. It refuses a nickname,
-so a typo can't disconnect a mailbox you meant to keep.
+This server needs `gmail.modify`, and that's what it checks for. It covers
+reading, drafting, sending, and labelling, but never permanent deletion. The
+shared consent screen also lists `gmail.readonly`, `gmail.send`, and
+`gmail.labels` so each capability is spelled out. All four are subsets of
+what `gmail.modify` already grants. If an account never granted
+`gmail.modify`, every tool says so and tells you which alias to re-run
+`auth.js` for.
 
 ### Nicknames: more than one name for an account
 
-Each Gmail account has one main alias and can have any number of
-nicknames. A nickname works anywhere an alias does, both in the CLI and
-when talking to Claude, and it shares the account's single refresh token.
+Each account has one main alias and can have any number of nicknames. A
+nickname works anywhere an alias does, both in the CLI and when talking to
+Claude, and it shares the account's single refresh token.
 `search_all_accounts` searches each mailbox once, no matter how many names
-it has.
-
-```bash
-node src/auth.js --nick dodobumbum dodo     # "dodo" now means dodobumbum
-node src/auth.js --unnick dodo              # remove the nickname, keep the account
-```
-
-`--list` shows nicknames next to each account.
-
-If you run `node src/auth.js <alias>` while signed into an email that's
-already connected under another alias, it doesn't create a second entry.
-It refreshes that account's token and adds `<alias>` as a nickname. To
-re-authorize an account later (for example after the 7-day Testing-mode
-expiry), you can run `auth.js` with its main alias or any of its nicknames.
-
-Name rules:
-
-- A name can only be used once. `--nick` refuses a name that's already
-  another account's alias or nickname.
-- An alias can't be silently re-pointed at a different mailbox. If `work`
-  is connected to one email and you run `node src/auth.js work` while
-  signed into a second email that's already connected under another alias,
-  it stops with an error instead. Remove `work` first, or make it a
-  nickname of the other account.
+it has. Nicknames are managed in google-mcp-accounts
+(`node auth.js --nick <alias> <nickname>`, `--unnick <nickname>`).
 
 In Claude, `list_accounts` returns each account's `nicknames` alongside its
 alias and email, and every tool's description lists them too (e.g.
 `dodobumbum (also: dodo)`), so Claude can map a nickname to the right
 account.
 
-An `accounts.json` written before nicknames existed keeps working as is.
-If it has the same email connected under two separate aliases, those
-aren't merged automatically. Remove one with `--remove`, then add it back
-as a nickname with `--nick`.
+## 2. Install this server
 
-## 4. Wire it into Claude Desktop
+```bash
+cd multi-gmail-mcp
+npm install
+```
+
+Requires Node.js 20+. Install google-mcp-accounts first. This repo depends
+on it as a local folder:
+
+```json
+"google-mcp-accounts": "file:../google-mcp-accounts"
+```
+
+That only works while both repos sit **side by side in the same parent
+folder**, which is today's layout. If this repo is cloned somewhere
+google-mcp-accounts isn't a sibling (for example, from separate GitHub
+remotes), change that line to a git dependency such as
+`"github:<you>/google-mcp-accounts#v1.0.0"`, pinned to a tag. With `file:`,
+changes in google-mcp-accounts take effect here immediately. With a git
+URL, each server picks up shared changes only when you bump the tag.
+
+## 3. Wire it into Claude Desktop
 
 Open (or create) Claude Desktop's config file:
 
@@ -293,7 +230,7 @@ To use a different folder, add an `env` entry to the same config:
 }
 ```
 
-## 5. Use it
+## 4. Use it
 
 Just talk to Claude naturally:
 
@@ -314,12 +251,12 @@ parsing, MIME/body parsing, status derivation, the account store, and the
 audit log:
 
 ```bash
-npm test     # 50 tests
+npm test     # 50 tests (store/audit ones exercise the shared google-mcp-accounts package)
 npm run lint    # eslint
 npm run format  # prettier --write
 ```
 
-Run `npm test` after any change to `src/gmail.js` or `src/store.js` - these
+Run `npm test` after any change to `src/gmail.js` or google-mcp-accounts - these
 tests already caught one real bug during development (a multipart/alternative
 email could return its HTML part instead of its plain-text part, depending on
 part order).
@@ -351,10 +288,11 @@ wrong thing with your email." What's defended against:
   no flag or argument that makes a reply go out directly.
 - **Local audit log.** Every `send_email` call (including dry runs),
   `draft_reply_to_message`, and `delete_draft` call is appended to
-  `~/.multi-gmail-mcp/audit.log` as one JSON line - timestamp, account,
+  the shared `~/.google-mcp/audit.log` as one JSON line - timestamp,
+  `"server": "multi-gmail-mcp"`, account,
   outcome, and a few identifying fields (recipient, subject, message/draft
   id). It deliberately never logs the email body. Tail it with
-  `tail -f ~/.multi-gmail-mcp/audit.log` if something looks off later.
+  `tail -f ~/.google-mcp/audit.log` if something looks off later.
 - **File access limited to one folder.** `attach_document` can only read
   from, and `download_attachment` can only write to, the files folder
   (`~/Downloads/gmail-mcp` by default). Paths are checked after resolving
@@ -362,28 +300,30 @@ wrong thing with your email." What's defended against:
   to a draft or overwrite a file elsewhere. Downloads never overwrite an
   existing file without `overwrite: true` and never write through a
   symlink, and both tools cap size at Gmail's own 25MB.
-- **Crash-safe token storage.** `accounts.json` is written atomically
-  (write to a temp file, then rename) and in-process writes are serialized,
-  so a crash mid-write, or two tool calls racing, can't corrupt the file
-  or silently drop an update.
+- **Crash-safe token storage, in one place.** The shared store in
+  google-mcp-accounts writes `accounts.json` atomically (temp file, then
+  rename) and serializes in-process writes, so a crash mid-write, or two
+  tool calls racing, can't corrupt the file or silently drop an update.
+  This server never writes tokens. Its only write is `default_from` (via
+  `set_default_from`/`clear_default_from`), which goes through the shared
+  store's `setAccountField`, and that refuses to touch tokens, emails,
+  nicknames, or scopes.
 - **Every tool call is wrapped in try/catch** - a Gmail API error, a bad
   file path, or an injection guard tripping turns into a normal MCP error
   result, never an uncaught exception that kills the whole stdio server
   (which would also break every other in-flight tool call).
-- `~/.multi-gmail-mcp/accounts.json` holds OAuth **refresh tokens** (not
+- `~/.google-mcp/accounts.json` holds OAuth **refresh tokens** (not
   passwords) for every connected account, saved with permissions restricted
   to your user (`0600`). Treat that file like a password vault - back it up
   encrypted if at all, and never commit it or share it.
-- **Least-privilege scope.** Connecting asks Google for one scope,
-  `gmail.modify`: read, draft, send and label mail, but never permanently
-  delete it, and no access to account settings beyond reading the Send-as
-  list. Accounts connected before this change still hold the older, broader
-  set (`gmail.readonly`, `gmail.send`, `gmail.labels`, `userinfo.email` on
-  top of `gmail.modify`) until you re-run `node src/auth.js <alias>`.
+- **Gmail scopes.** Of the shared consent screen's scopes, this server only
+  relies on `gmail.modify`: read, draft, send and label mail, but never
+  permanently delete it. See **Scopes** above.
 - To fully revoke access (not just remove the local alias), go to
   https://myaccount.google.com/permissions and remove the app there too.
-- Running `node src/auth.js <alias>` again on an existing alias re-authorizes
-  and overwrites its token - useful if access was revoked or scopes changed.
+- Running google-mcp-accounts' `node auth.js <alias>` again on an existing
+  alias re-authorizes and overwrites its token - useful if access was
+  revoked or scopes changed.
 
 ### Not fully defended: indirect prompt injection
 

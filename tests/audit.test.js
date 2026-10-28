@@ -4,13 +4,14 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-// audit.js reads CONFIG_DIR from store.js, which is computed from
-// os.homedir() at import time - isolate it the same way store.test.js does.
+// The shared audit log lives in CONFIG_DIR, which google-mcp-accounts computes
+// from GOOGLE_MCP_DIR at import time - isolate it the same way store.test.js does.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "mgmcp-test-audit-"));
-process.env.HOME = tmpHome;
-process.env.USERPROFILE = tmpHome;
+process.env.GOOGLE_MCP_DIR = path.join(tmpHome, ".google-mcp");
 
-const { logAuditEvent, AUDIT_LOG_PATH } = await import("../src/audit.js");
+const { createAuditLogger, AUDIT_LOG_PATH } = await import("google-mcp-accounts/audit");
+// The same logger server.js uses.
+const logAuditEvent = createAuditLogger("multi-gmail-mcp");
 
 test("logAuditEvent appends one JSON line per call, never email bodies", () => {
   logAuditEvent({
@@ -35,6 +36,7 @@ test("logAuditEvent appends one JSON line per call, never email bodies", () => {
   assert.equal(first.action, "send_email");
   assert.equal(first.outcome, "sent");
   assert.ok(first.ts); // ISO timestamp present
+  assert.equal(first.server, "multi-gmail-mcp"); // tagged with this server in the shared log
   assert.equal(first.detail.body, undefined); // never logs the body
 });
 

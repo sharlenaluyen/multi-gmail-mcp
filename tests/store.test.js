@@ -4,14 +4,15 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-// store.js computes CONFIG_DIR from os.homedir() at import time, so point
-// HOME at a throwaway temp directory before importing it - this keeps the
-// test from ever touching the real ~/.multi-gmail-mcp on the machine running it.
+// The shared store (google-mcp-accounts) computes CONFIG_DIR from
+// GOOGLE_MCP_DIR at import time, so point it at a throwaway temp directory
+// before importing - this keeps the test from ever touching the real
+// ~/.google-mcp on the machine running it.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "mgmcp-test-"));
-process.env.HOME = tmpHome;
-process.env.USERPROFILE = tmpHome;
+process.env.GOOGLE_MCP_DIR = path.join(tmpHome, ".google-mcp");
 
-const store = await import("../src/store.js");
+const store = await import("google-mcp-accounts/store");
+const { setDefaultFrom } = await import("../src/gmail.js");
 
 test("upsertAccount persists an account and loadAccounts reads it back", async () => {
   await store.upsertAccount("alias1", { email: "a@example.com", refresh_token: "rt1" });
@@ -105,11 +106,11 @@ test("gmail.js resolves nicknames and lists each mailbox once", async () => {
 });
 
 test("setDefaultFrom saves and clears default_from, and re-authorizing keeps it", async () => {
-  await store.setDefaultFrom("other", '"Me" <me@custom.com>'); // via a nickname
+  await setDefaultFrom("other", '"Me" <me@custom.com>'); // via a nickname
   assert.equal(store.loadAccounts().main.default_from, '"Me" <me@custom.com>');
   await store.upsertAccount("main", { email: "same@x.com", refresh_token: "fresh" });
   assert.equal(store.loadAccounts().main.default_from, '"Me" <me@custom.com>');
-  await store.setDefaultFrom("main", null);
+  await setDefaultFrom("main", null);
   assert.equal(store.loadAccounts().main.default_from, undefined);
-  await assert.rejects(store.setDefaultFrom("nope", "x@y.com"), /Unknown account alias/);
+  await assert.rejects(setDefaultFrom("nope", "x@y.com"), /Unknown account alias/);
 });

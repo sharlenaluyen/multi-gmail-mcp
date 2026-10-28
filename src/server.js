@@ -23,16 +23,19 @@ import {
   formatFromHeader,
   findSendAsAddress,
   markUntrusted,
+  setDefaultFrom,
   UNTRUSTED_NOTICE,
 } from "./gmail.js";
 import { FILES_DIR, resolveReadablePath, resolveWritablePath } from "./files.js";
-import { logAuditEvent } from "./audit.js";
-import { setDefaultFrom } from "./store.js";
+import { createAuditLogger } from "google-mcp-accounts";
 
 const server = new McpServer({
   name: "multi-gmail-mcp",
-  version: "1.2.0",
+  version: "2.0.0",
 });
+
+// Shared ~/.google-mcp/audit.log, every line tagged with this server's name.
+const logAuditEvent = createAuditLogger("multi-gmail-mcp");
 
 function aliasEnumHint() {
   const aliases = getConnectedAliases();
@@ -42,7 +45,7 @@ function aliasEnumHint() {
   });
   return aliases.length
     ? ` Connected aliases: ${described.join(", ")}. A nickname works anywhere an alias does.`
-    : " No accounts connected yet - run the auth script.";
+    : " No accounts connected yet - run google-mcp-accounts' auth.js.";
 }
 
 // MCP tool annotations: hints that let the client (Claude Desktop) decide
