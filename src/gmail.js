@@ -382,6 +382,25 @@ export function listAttachmentParts(payload, out = []) {
   return out;
 }
 
+// How an edit changes a draft's text. The plain and HTML parts are two
+// versions of one message, so replacing one without the other would leave
+// the other stale: new plain text drops the HTML, and new HTML without new
+// plain text makes the draft HTML-only. An empty `html` removes the
+// formatting and keeps the plain text.
+export function draftTextChanges(current, { body, html }) {
+  if (html === undefined) return body === undefined ? {} : { body, html: undefined };
+  if (html === "") {
+    const plain = body ?? current.body;
+    if (!plain) {
+      throw new Error(
+        "This draft has no plain-text version, so removing its HTML would leave it empty. Pass body too."
+      );
+    }
+    return { body: plain, html: undefined };
+  }
+  return { body: body ?? "", html };
+}
+
 export async function getDraftFields(gmail, draftId) {
   const { data: draft } = await withRetry(() =>
     gmail.users.drafts.get({ userId: "me", id: draftId, format: "full" })

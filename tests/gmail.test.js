@@ -16,6 +16,7 @@ import {
   formatFromHeader,
   findSendAsAddress,
   getDraftFields,
+  draftTextChanges,
   markUntrusted,
   loadDraftAttachments,
   threadReplyState,
@@ -377,6 +378,59 @@ test("an HTML-only draft keeps its HTML instead of turning it into visible plain
     buildRawMessage({ to: "a@x.com", subject: "S", body: current.body, html: current.html })
   );
   assert.match(raw, /Content-Type: text\/html; charset="UTF-8"\r\n\r\n<p>hi<\/p>/);
+});
+
+test("draftTextChanges: an edit that doesn't touch the text keeps both versions", () => {
+  assert.deepEqual(draftTextChanges({ body: "B", html: "<p>B</p>" }, {}), {});
+});
+
+test("draftTextChanges: new plain text alone drops the stale HTML", () => {
+  assert.deepEqual(draftTextChanges({ body: "B", html: "<p>B</p>" }, { body: "New" }), {
+    body: "New",
+    html: undefined,
+  });
+});
+
+test("draftTextChanges: body + html_body replace both versions", () => {
+  assert.deepEqual(draftTextChanges({ body: "B" }, { body: "New", html: "<b>New</b>" }), {
+    body: "New",
+    html: "<b>New</b>",
+  });
+});
+
+test("draftTextChanges: html_body alone makes the draft HTML-only instead of keeping stale plain text", () => {
+  assert.deepEqual(draftTextChanges({ body: "Old", html: "<p>Old</p>" }, { html: "<b>New</b>" }), {
+    body: "",
+    html: "<b>New</b>",
+  });
+});
+
+test('draftTextChanges: html_body "" removes the formatting and keeps the plain text', () => {
+  assert.deepEqual(draftTextChanges({ body: "B", html: "<p>B</p>" }, { html: "" }), {
+    body: "B",
+    html: undefined,
+  });
+  assert.deepEqual(draftTextChanges({ body: "", html: "<p>B</p>" }, { body: "New", html: "" }), {
+    body: "New",
+    html: undefined,
+  });
+  assert.throws(() => draftTextChanges({ body: "", html: "<p>B</p>" }, { html: "" }), /Pass body too/);
+});
+
+test("a plain draft edited with html_body becomes multipart/alternative and keeps its attachment", () => {
+  const changes = draftTextChanges({ body: "hi" }, { body: "hi", html: "<p><b>hi</b></p>" });
+  const raw = decodeRaw(
+    buildRawMessage({
+      to: "a@x.com",
+      subject: "S",
+      ...changes,
+      attachments: [{ filename: "a.pdf", mimeType: "application/pdf", contentBase64: b64("pdf") }],
+    })
+  );
+  assert.match(
+    raw,
+    /multipart\/mixed[^]*multipart\/alternative[^]*text\/plain[^]*hi[^]*text\/html[^]*<p><b>hi<\/b><\/p>[^]*a\.pdf/
+  );
 });
 
 test("threadReplyState: someone else wrote last, so the thread awaits a reply", () => {

@@ -37,8 +37,13 @@ passed. They either build a draft or return a preview:
   In-Reply-To/References, keeps Gmail's thread view), optionally reply-all.
   There is deliberately no "send a reply" tool in this server - replying
   always lands as a draft you send yourself from Gmail.
-- `modify_draft` - replace a draft's recipient, subject, body and/or From
-  address in one call (attachments are kept)
+- `modify_draft` - replace a draft's recipient, subject, body, HTML and/or
+  From address in one call (attachments are kept)
+
+`create_draft`, `draft_reply_to_message` and `modify_draft` take an optional
+`html_body` for real formatting (bold, lists, tables, links). HTML put in
+`body` shows up as literal tags, since `body` is plain text. Pass both: mail
+apps show `html_body`, and `body` is the plain-text fallback.
 - `attach_document` - add a file from the files folder to an existing draft,
   keeping its text, formatting and earlier attachments (≤25MB in total)
 - `download_attachment` - save an incoming attachment into the files folder
@@ -91,9 +96,11 @@ google-mcp-accounts' `node auth.js --list`) shows which address each account sen
 - **Draft edits keep everything you didn't change.** Editing a draft (its
   recipient, subject, body, or adding an attachment) keeps its From, its
   email thread, its existing attachments and inline images, and its HTML
-  formatting. The one exception: replacing the body with `modify_draft`
-  drops the old HTML, since the new text is plain and recipients would
-  otherwise still see the old formatted version.
+  formatting. When `modify_draft` changes the text, the plain and HTML
+  versions change together so they never disagree: `body` alone makes the
+  draft plain text (dropping the old HTML, which recipients would otherwise
+  still see), `html_body` alone makes it HTML-only, and `html_body: ""`
+  removes the formatting and keeps the plain text.
   `modify_draft` changes it only if you pass `from`.
 - **Reply-all leaves you out.** Reply-all drops both your primary address and
   your send-as address from the Cc list.

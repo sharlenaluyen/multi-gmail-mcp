@@ -15,6 +15,7 @@ import {
   withRetry,
   guessMimeType,
   getDraftFields,
+  draftTextChanges,
   loadDraftAttachments,
   splitAddressList,
   removeAddress,
@@ -190,6 +191,14 @@ const fromOverride = z
   .optional()
   .describe(
     "From address for just this message, overriding the account's default_from. Must be a verified Send mail as address."
+  );
+
+const htmlBody = z
+  .string()
+  .max(2_000_000)
+  .optional()
+  .describe(
+    "HTML version of the email, for real formatting: <p>, <b>, <i>, <a href>, <ul>/<ol>, <table>, inline style attributes. Recipients' mail apps show this; body is the plain-text fallback for apps that can't show HTML, so pass both with the same content."
   );
 
 // A per-call From override is checked against Gmail's Send-as list the same
@@ -557,13 +566,14 @@ defineTool(
     account: z.string(),
     message_id: z.string(),
     body: z.string().max(2_000_000),
+    html_body: htmlBody,
     reply_all: z
       .boolean()
       .default(false)
       .describe("Also Cc everyone who was on the original To/Cc, not just the original sender"),
     from: fromOverride,
   },
-  async ({ account, message_id, body, reply_all, from: fromArg }) => {
+  async ({ account, message_id, body, html_body, reply_all, from: fromArg }) => {
     const gmail = gmailClientFor(account);
     const info = getAccountInfo(account);
     const from = await resolveFrom(gmail, info, fromArg);
@@ -601,6 +611,7 @@ defineTool(
       cc,
       subject,
       body,
+      html: html_body || undefined,
       from,
       inReplyTo: originalMessageId,
       references,
@@ -650,21 +661,22 @@ defineTool(
 
 defineTool(
   "create_draft",
-  `Create a draft email in one connected Gmail account (does not send it).${aliasEnumHint()}`,
+  `Create a draft email in one connected Gmail account (does not send it). For formatting (bold, lists, tables, links), pass html_body as well as body.${aliasEnumHint()}`,
   {
     account: z.string(),
     to: z.string().max(2000),
     subject: z.string().max(998),
     body: z.string().max(2_000_000),
+    html_body: htmlBody,
     cc: z.string().max(2000).optional(),
     bcc: z.string().max(2000).optional(),
     from: fromOverride,
   },
-  async ({ account, to, subject, body, cc, bcc, from: fromArg }) => {
+  async ({ account, to, subject, body, html_body, cc, bcc, from: fromArg }) => {
     const gmail = gmailClientFor(account);
     const info = getAccountInfo(account);
     const from = await resolveFrom(gmail, info, fromArg);
-    const raw = buildRawMessage({ to, cc, bcc, subject, body, from });
+    const raw = buildRawMessage({ to, cc, bcc, subject, body, html: html_body || undefined, from });
     const { data } = await withRetry(() =>
       gmail.users.drafts.create({ userId: "me", requestBody: { message: { raw } } })
     );
@@ -736,29 +748,32 @@ async function rebuildDraft(gmail, info, current, changes, extraAttachments = []
 
 defineTool(
   "modify_draft",
-  `Replace a draft's recipient, subject, body, and/or From address all at once. Any field left out keeps its current value, and attachments are kept. Replacing the body also drops the draft's HTML formatting, since the new text is plain.${aliasEnumHint()}`,
+  `Replace a draft's recipient, subject, body, HTML, and/or From address all at once. Any field left out keeps its current value, and attachments are kept. The text has a plain version (body) and an optional formatted one (html_body), so when changing the text pass both: body alone makes the draft plain text (its old HTML is dropped), and html_body alone makes it HTML-only. html_body: "" removes the formatting and keeps the plain text.${aliasEnumHint()}`,
   {
     account: z.string(),
     draft_id: z.string(),
     to: z.string().max(2000).optional(),
     subject: z.string().max(998).optional(),
     body: z.string().max(2_000_000).optional(),
+    html_body: htmlBody,
     cc: z.string().max(2000).optional(),
     bcc: z.string().max(2000).optional(),
     from: fromOverride.describe(
       "New From address for this draft. Left out, the draft keeps its current From."
     ),
   },
-  async ({ account, draft_id, to, subject, body, cc, bcc, from: fromArg }) => {
+  async ({ account, draft_id, to, subject, body, html_body, cc, bcc, from: fromArg }) => {
     const gmail = gmailClientFor(account);
     const info = getAccountInfo(account);
-    const changes = Object.fromEntries(
-      Object.entries({ to, cc, bcc, subject, body }).filter(([, value]) => value !== undefined)
-    );
-    // The old HTML would no longer match the new text, and recipients see the HTML.
-    if (body !== undefined) changes.html = undefined;
+    const current = await getDraftFields(gmail, draft_id);
+    const changes = {
+      ...Object.fromEntries(
+        Object.entries({ to, cc, bcc, subject }).filter(([, value]) => value !== undefined)
+      ),
+      ...draftTextChanges(current, { body, html: html_body }),
+    };
     if (fromArg) changes.from = await resolveFrom(gmail, info, fromArg);
-    const data = await rebuildDraft(gmail, info, await getDraftFields(gmail, draft_id), changes);
+    const data = await rebuildDraft(gmail, info, current, changes);
     return jsonResult({ account: info.email, draft_id: data.id, message_id: data.message?.id });
   }
 );
