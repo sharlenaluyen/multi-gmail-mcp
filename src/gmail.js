@@ -202,6 +202,12 @@ export function extractPlainTextBody(payload) {
   return any ? decodeBase64Url(any) : "";
 }
 
+// The text/html part, or "" for a plain-text-only email.
+export function extractHtmlBody(payload) {
+  const html = findPartData(payload, "text/html");
+  return html ? decodeBase64Url(html) : "";
+}
+
 export function headerValue(headers, name) {
   const h = (headers || []).find((h) => h.name.toLowerCase() === name.toLowerCase());
   return h ? h.value : "";

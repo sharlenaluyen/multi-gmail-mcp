@@ -43,7 +43,9 @@ passed. They either build a draft or return a preview:
 `create_draft`, `draft_reply_to_message` and `modify_draft` take an optional
 `html_body` for real formatting (bold, lists, tables, links). HTML put in
 `body` shows up as literal tags, since `body` is plain text. Pass both: mail
-apps show `html_body`, and `body` is the plain-text fallback.
+apps show `html_body`, and `body` is the plain-text fallback. To edit a
+draft's existing formatting, read it with `get_message` and `include_html:
+true`, then pass the changed HTML back as `html_body`.
 - `attach_document` - add a file from the files folder to an existing draft,
   keeping its text, formatting and earlier attachments (≤25MB in total)
 - `download_attachment` - save an incoming attachment into the files folder

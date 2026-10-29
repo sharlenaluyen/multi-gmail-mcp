@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildRawMessage,
   extractPlainTextBody,
+  extractHtmlBody,
   headerValue,
   computeStatus,
   guessMimeType,
@@ -93,6 +94,25 @@ test("extractPlainTextBody finds text/plain nested inside multipart/alternative"
     ],
   };
   assert.equal(extractPlainTextBody(payload), "hi");
+});
+
+test("extractHtmlBody finds text/html inside an attachment-carrying message, and is empty for plain text", () => {
+  const b64 = (text) => Buffer.from(text).toString("base64");
+  const payload = {
+    mimeType: "multipart/mixed",
+    parts: [
+      {
+        mimeType: "multipart/alternative",
+        parts: [
+          { mimeType: "text/plain", body: { data: b64("hi") } },
+          { mimeType: "text/html", body: { data: b64("<p><b>hi</b></p>") } },
+        ],
+      },
+      { mimeType: "text/html", filename: "page.html", body: { attachmentId: "a1" } },
+    ],
+  };
+  assert.equal(extractHtmlBody(payload), "<p><b>hi</b></p>");
+  assert.equal(extractHtmlBody({ mimeType: "text/plain", body: { data: b64("hi") } }), "");
 });
 
 test("headerValue matches case-insensitively and returns '' when missing", () => {
