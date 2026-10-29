@@ -14,14 +14,14 @@ Read/search:
 - `list_accounts` - list every connected Gmail account, its alias, any nicknames, and its default From address
 - `search_emails` - search one account with Gmail query syntax
 - `search_all_accounts` - run the same search across every connected account
-- `get_message` - fetch full body/headers of one email
+- `get_message` - one email or draft: From/To/Cc/Bcc, subject, date,
+  status (sent / draft / trash / spam / inbox / archived / read / unread /
+  starred) and body. `headers_only: true` skips the body; `include_html:
+  true` adds the HTML version
 - `get_thread` - every message in a thread, oldest first, plus a
   `reply_state` summary: whether the last message is yours, whether the
   thread is `awaiting_your_reply`, and whether a draft reply already exists.
   This is the "have I already replied?" check
-- `get_recipient` - just the To/Cc/Bcc of a message or draft
-- `get_subject_line` - just the subject of a message or draft
-- `get_status` - sent / draft / trash / spam / inbox / archived / read / unread / starred
 - `list_labels` - list labels/folders
 - `list_drafts` - list drafts in an account (id, recipient, subject, snippet) without already knowing a draft_id
 - `get_attachments` - list attachments on a message (filename, type, size, attachment_id)
